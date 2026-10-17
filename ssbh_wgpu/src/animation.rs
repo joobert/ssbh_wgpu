@@ -27,6 +27,36 @@ pub struct AnimatedBone<'a> {
 }
 
 impl<'a> AnimatedBone<'a> {
+    pub fn name(&self) -> &str {
+        &self.bone.name
+    }
+
+    pub fn parent_index(&self) -> Option<usize> {
+        self.bone.parent_index
+    }
+
+    /// The bone's rest pose from the skeleton as (translation, rotation, scale).
+    pub fn rest_trs(&self) -> (glam::Vec3, glam::Quat, glam::Vec3) {
+        let (scale, rotation, translation) =
+            glam::Mat4::from_cols_array_2d(&self.bone.transform).to_scale_rotation_translation();
+        (translation, rotation, scale)
+    }
+
+    /// Replace the bone's local transform, ignoring any animation and transform flags.
+    pub fn set_current_trs(
+        &mut self,
+        translation: glam::Vec3,
+        rotation: glam::Quat,
+        scale: glam::Vec3,
+    ) {
+        self.anim_transform = Some(AnimTransform {
+            translation,
+            rotation,
+            scale,
+        });
+        self.flags = TransformFlags::default();
+    }
+
     fn animated_transform(&self, scale_compensation: glam::Vec3) -> glam::Mat4 {
         self.anim_transform
             .as_ref()
@@ -182,6 +212,20 @@ pub fn animate_skel<'a>(
     hlpb: Option<&HlpbData>,
     current_frame: f32,
 ) {
+    animate_skel_with_edit(result, skel, anims, hlpb, current_frame, |_| {});
+}
+
+/// Like [animate_skel], but `edit` can change the sampled local transforms before the
+/// hierarchy is evaluated. For example, a thrown fighter's root can be placed on the thrower's
+/// `throw` bone while the rest of its animation plays normally.
+pub fn animate_skel_with_edit<'a>(
+    result: &mut AnimationTransforms,
+    skel: &SkelData,
+    anims: impl Iterator<Item = &'a AnimData>,
+    hlpb: Option<&HlpbData>,
+    current_frame: f32,
+    edit: impl FnOnce(&mut [(usize, AnimatedBone)]),
+) {
     // TODO: Avoid allocating here?
     // TODO: Just take the bones or groups directly?
     let mut bones: Vec<_> = skel
@@ -206,6 +250,8 @@ pub fn animate_skel<'a>(
     for anim in anims {
         apply_transforms(&mut bones, anim, current_frame);
     }
+
+    edit(&mut bones);
 
     animate_skel_inner(result, &mut bones, &skel.bones, hlpb);
 }

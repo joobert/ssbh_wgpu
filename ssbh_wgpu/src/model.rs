@@ -1,5 +1,8 @@
 use crate::{
-    animation::{animate_materials, animate_skel, animate_visibility, AnimationTransforms},
+    animation::{
+        animate_materials, animate_skel_with_edit, animate_visibility, AnimatedBone,
+        AnimationTransforms,
+    },
     bone_rendering::*,
     shape::IndexedMeshBuffers,
     swing::SwingPrc,
@@ -212,6 +215,33 @@ impl RenderModel {
         shared_data: &SharedRenderData,
         current_frame: f32,
     ) {
+        self.apply_anims_with_skel_edit(
+            queue,
+            anims,
+            skel,
+            matl,
+            hlpb,
+            shared_data,
+            current_frame,
+            |_| {},
+        );
+    }
+
+    /// Like [RenderModel::apply_anims], but `skel_edit` can change the sampled local bone
+    /// transforms before world transforms are evaluated. See
+    /// [crate::animation::animate_skel_with_edit].
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_anims_with_skel_edit<'a>(
+        &mut self,
+        queue: &wgpu::Queue,
+        anims: impl Iterator<Item = &'a AnimData> + Clone,
+        skel: Option<&SkelData>,
+        matl: Option<&MatlData>,
+        hlpb: Option<&HlpbData>,
+        shared_data: &SharedRenderData,
+        current_frame: f32,
+        skel_edit: impl FnOnce(&mut [(usize, AnimatedBone)]),
+    ) {
         // Update the buffers associated with each skel.
         // This avoids updating per mesh object and allocating new buffers.
         let start = std::time::Instant::now();
@@ -227,12 +257,13 @@ impl RenderModel {
         }
 
         if let Some(skel) = skel {
-            animate_skel(
+            animate_skel_with_edit(
                 &mut self.animation_transforms,
                 skel,
                 anims,
                 hlpb,
                 current_frame,
+                skel_edit,
             );
 
             queue.write_data(

@@ -168,6 +168,26 @@ impl ModelFolder {
             .map(|dir| dir.filter_map(|p| p.ok().map(|p| p.path())).collect())
             .unwrap_or_default();
 
+        Self::load_files(files.into_iter().filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().to_string();
+            Some((name, path))
+        }))
+    }
+
+    /// Like [ModelFolder::load_folder] for files that don't all live in one folder, such as a
+    /// mod costume that shares some files from another slot. Each file is listed under the
+    /// name given here, which may differ from the name of the file it is read from.
+    pub fn load_files<I, S, P>(files: I) -> Self
+    where
+        I: IntoIterator<Item = (S, P)>,
+        S: Into<String>,
+        P: Into<PathBuf>,
+    {
+        let files: Vec<(String, PathBuf)> = files
+            .into_iter()
+            .map(|(name, path)| (name.into(), path.into()))
+            .collect();
+
         Self {
             meshes: read_files(&files, "numshb", MeshData::from_file),
             meshexes: read_files(&files, "numshexb", MeshExData::from_file),
@@ -329,7 +349,7 @@ pub fn load_model_folders<P: AsRef<Path>>(root: P) -> Vec<(PathBuf, ModelFolder)
     models
 }
 
-fn read_files<T, F>(files: &[PathBuf], extension: &str, read_t: F) -> ModelFiles<T>
+fn read_files<T, F>(files: &[(String, PathBuf)], extension: &str, read_t: F) -> ModelFiles<T>
 where
     T: Send,
     F: Fn(PathBuf) -> Result<T, Box<dyn Error>> + Sync,
@@ -337,15 +357,15 @@ where
     // Threading optimizes loading many animations and doesn't negatively impact other files.
     files
         .iter()
-        .filter(|p| p.extension().and_then(|p| p.to_str()) == Some(extension))
+        .filter(|(name, _)| Path::new(name).extension().and_then(|e| e.to_str()) == Some(extension))
         .par_bridge()
-        .filter_map(|p| {
-            Some((
-                p.file_name()?.to_string_lossy().to_string(),
+        .map(|(name, p)| {
+            (
+                name.clone(),
                 read_t(p.clone())
                     .inspect_err(|e| error!("Error reading {:?}: {}", p, e))
                     .ok(),
-            ))
+            )
         })
         .collect()
 }
