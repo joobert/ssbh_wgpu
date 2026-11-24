@@ -6,11 +6,11 @@ use crate::{
     DeviceBufferExt,
 };
 use glam::{vec4, Vec4};
-use log::warn;
 use ssbh_data::{
     mesh_data::{error::Error, MeshObjectData},
     skel_data::SkelData,
 };
+use tracing::warn;
 use wgpu::Device;
 
 // TODO: Create a function and tests that groups attributes into two buffers
@@ -45,15 +45,15 @@ pub fn buffer0(mesh_data: &MeshObjectData) -> Result<Vec<VertexInput0>, Error> {
             ssbh_data::mesh_data::VectorData::Vector3(v) => {
                 v.iter().map(|v| v.extend(1.0)).collect()
             }
-            ssbh_data::mesh_data::VectorData::Vector4(v) => v.iter().copied().collect(),
+            ssbh_data::mesh_data::VectorData::Vector4(v) => v.to_vec(),
         })
         .unwrap_or_else(|| vec![vec4(0.0, 0.0, 0.0, 1.0); vertex_count]);
 
     for ((position, normal), tangent) in positions.into_iter().zip(normals).zip(tangents) {
         vertices.push(VertexInput0 {
-            position0: position.into(),
-            normal0: normal.into(),
-            tangent0: tangent.into(),
+            position0: position,
+            normal0: normal,
+            tangent0: tangent,
         })
     }
 
