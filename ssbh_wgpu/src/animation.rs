@@ -43,6 +43,9 @@ impl<'a> AnimatedBone<'a> {
     }
 
     /// Replace the bone's local transform, ignoring any animation and transform flags.
+    ///
+    /// Children with scale compensation still undo the animated scale and not the one set here,
+    /// so scaling the root scales the whole model.
     pub fn set_current_trs(
         &mut self,
         translation: glam::Vec3,
@@ -252,9 +255,19 @@ pub fn animate_skel_with_edit<'a>(
         apply_transforms(&mut bones, anim, anim_current_frame);
     }
 
+    let compensated = animated_scales(&bones);
     edit(&mut bones);
 
-    animate_skel_inner(result, &mut bones, &skel.bones, hlpb);
+    evaluate_skel(result, &mut bones, &skel.bones, hlpb, &compensated);
+}
+
+/// The scale of each bone that its children with scale compensation undo.
+fn animated_scales(bones: &[(usize, AnimatedBone)]) -> Vec<glam::Vec3> {
+    // TODO: How to handle the case where the parent isn't animated?
+    bones
+        .iter()
+        .map(|(_, bone)| bone.anim_transform.map_or(glam::Vec3::ONE, |t| t.scale))
+        .collect()
 }
 
 pub fn anim_frame(current_frame: f32, should_loop: bool, anim: &AnimData) -> f32 {
@@ -270,6 +283,17 @@ pub fn animate_skel_inner(
     bones: &mut [(usize, AnimatedBone)],
     skel_bones: &[BoneData],
     hlpb: Option<&HlpbData>,
+) {
+    let compensated = animated_scales(bones);
+    evaluate_skel(result, bones, skel_bones, hlpb, &compensated);
+}
+
+fn evaluate_skel(
+    result: &mut AnimationTransforms,
+    bones: &mut [(usize, AnimatedBone)],
+    skel_bones: &[BoneData],
+    hlpb: Option<&HlpbData>,
+    compensated: &[glam::Vec3],
 ) {
     let evaluation_order = evaluation_order(bones);
 
@@ -296,13 +320,13 @@ pub fn animate_skel_inner(
     // TODO: How to handle cyclic dependencies due to constraining bones to each other?
     for i in &evaluation_order {
         let bone = &bones[*i];
-        let (parent_world, current) = calculate_world_transform(bones, &bone.1, result);
+        let (parent_world, current) = calculate_world_transform(compensated, &bone.1, result);
         result.world_transforms[bone.0] = parent_world * current;
     }
 
     for i in &evaluation_order {
         let bone = &bones[*i];
-        let (parent_world, mut current) = calculate_world_transform(bones, &bone.1, result);
+        let (parent_world, mut current) = calculate_world_transform(compensated, &bone.1, result);
 
         if let Some(hlpb) = hlpb {
             apply_constraints(&mut current, hlpb, bone, result, skel_bones);
@@ -385,7 +409,7 @@ fn apply_constraints(
 }
 
 fn calculate_world_transform(
-    bones: &[(usize, AnimatedBone)],
+    compensated: &[glam::Vec3],
     bone: &AnimatedBone,
     result: &AnimationTransforms,
 ) -> (glam::Mat4, glam::Mat4) {
@@ -398,13 +422,7 @@ fn calculate_world_transform(
         // The current implementation doesn't need to check inheritance, which seems odd.
         let scale_compensation = if bone.compensate_scale {
             // Compensate scale uses the parent's non accumulated scale.
-            // TODO: How to handle the case where the parent isn't animated?
-            let parent_scale = bones[parent_index]
-                .1
-                .anim_transform
-                .map(|t| t.scale)
-                .unwrap_or(glam::Vec3::ONE);
-            1.0 / parent_scale
+            1.0 / compensated[parent_index]
         } else {
             glam::Vec3::ONE
         };
@@ -1118,6 +1136,77 @@ mod tests {
             false,
         );
         transforms
+    }
+
+    /// Scaling the root from an edit scales every bone, whether or not a child's scale
+    /// compensation undoes the root's animated scale.
+    #[test]
+    fn an_edited_root_scale_reaches_compensated_bones() {
+        let skel = SkelData {
+            major_version: 1,
+            minor_version: 0,
+            bones: vec![identity_bone("A", None), identity_bone("B", Some(0))],
+        };
+        let node = |name: &str, scale: [f32; 3]| NodeData {
+            name: name.to_string(),
+            tracks: vec![TrackData {
+                name: "Transform".to_string(),
+                compensate_scale: true,
+                values: TrackValues::Transform(vec![Transform {
+                    scale: scale.into(),
+                    rotation: quat(0.0, 0.0, 0.0, 1.0),
+                    translation: vec3(1.0, 2.0, 3.0),
+                }]),
+                transform_flags: TransformFlags::default(),
+            }],
+        };
+        let anim = AnimData {
+            major_version: 2,
+            minor_version: 0,
+            final_frame_index: 0.0,
+            groups: vec![GroupData {
+                group_type: GroupType::Transform,
+                nodes: vec![node("A", [1.0, 1.0, 2.0]), node("B", [1.0, 1.0, 1.0])],
+            }],
+        };
+        let world = |scale: f32| {
+            let mut transforms = AnimationTransforms::identity();
+            animate_skel_with_edit(
+                &mut transforms,
+                &skel,
+                [anim.clone()].iter(),
+                None,
+                0.0,
+                false,
+                |bones| {
+                    bones[0].1.set_current_trs(
+                        vec3(1.0, 2.0, 3.0) * scale,
+                        glam::Quat::IDENTITY,
+                        vec3(1.0, 1.0, 2.0) * scale,
+                    )
+                },
+            );
+            transforms.world_transforms[1]
+        };
+        // The animated scale is still undone.
+        assert_matrix_relative_eq!(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [2.0, 4.0, 9.0, 1.0],
+            ],
+            world(1.0).to_cols_array_2d()
+        );
+        assert_matrix_relative_eq!(
+            [
+                [0.5, 0.0, 0.0, 0.0],
+                [0.0, 0.5, 0.0, 0.0],
+                [0.0, 0.0, 0.5, 0.0],
+                [1.0, 2.0, 4.5, 1.0],
+            ],
+            world(0.5).to_cols_array_2d()
+        );
     }
 
     // TODO: test if the compensated scale is the scale that is inherited?
