@@ -209,8 +209,9 @@ pub fn animate_skel<'a>(
     anims: impl Iterator<Item = &'a AnimData>,
     hlpb: Option<&HlpbData>,
     current_frame: f32,
+    should_loop: bool,
 ) {
-    animate_skel_with_edit(result, skel, anims, hlpb, current_frame, |_| {});
+    animate_skel_with_edit(result, skel, anims, hlpb, current_frame, should_loop, |_| {});
 }
 
 /// Like [animate_skel], but `edit` can change the sampled local transforms before the
@@ -222,6 +223,7 @@ pub fn animate_skel_with_edit<'a>(
     anims: impl Iterator<Item = &'a AnimData>,
     hlpb: Option<&HlpbData>,
     current_frame: f32,
+    should_loop: bool,
     edit: impl FnOnce(&mut [(usize, AnimatedBone)]),
 ) {
     // TODO: Avoid allocating here?
@@ -246,12 +248,21 @@ pub fn animate_skel_with_edit<'a>(
 
     // TODO: Is it faster to use a separate array for animation info?
     for anim in anims {
-        apply_transforms(&mut bones, anim, current_frame);
+        let anim_current_frame = anim_frame(current_frame, should_loop, anim);
+        apply_transforms(&mut bones, anim, anim_current_frame);
     }
 
     edit(&mut bones);
 
     animate_skel_inner(result, &mut bones, &skel.bones, hlpb);
+}
+
+pub fn anim_frame(current_frame: f32, should_loop: bool, anim: &AnimData) -> f32 {
+    if should_loop {
+        current_frame.rem_euclid(anim.final_frame_index)
+    } else {
+        current_frame
+    }
 }
 
 pub fn animate_skel_inner(
@@ -691,6 +702,7 @@ mod tests {
             .iter(),
             None,
             0.0,
+            false,
         );
     }
 
@@ -713,6 +725,7 @@ mod tests {
             .iter(),
             None,
             0.0,
+            false,
         );
     }
 
@@ -734,6 +747,7 @@ mod tests {
             .iter(),
             None,
             0.0,
+            false,
         );
     }
 
@@ -773,6 +787,7 @@ mod tests {
             .iter(),
             None,
             0.0,
+            false,
         );
 
         // TODO: Test the unused indices?
@@ -900,6 +915,7 @@ mod tests {
             .iter(),
             None,
             0.0,
+            false,
         );
 
         // TODO: Test the unused indices?
@@ -999,6 +1015,7 @@ mod tests {
             .iter(),
             None,
             0.0,
+            false,
         );
 
         assert_matrix_relative_eq!(
@@ -1098,6 +1115,7 @@ mod tests {
             .iter(),
             None,
             0.0,
+            false,
         );
         transforms
     }
@@ -1320,6 +1338,7 @@ mod tests {
             .iter(),
             None,
             0.0,
+            false,
         );
 
         assert_matrix_relative_eq!(
@@ -1477,6 +1496,7 @@ mod tests {
                 ],
             }),
             0.0,
+            false,
         );
 
         assert_matrix_relative_eq!(
